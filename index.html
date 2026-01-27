@@ -177,6 +177,28 @@
 
       <button class="danger" id="resetBtn">RESET SAVE</button>
       <div class="footer">Auto-saves | Scaling: Cursor x1.25, others x1.40 | Shows owned count per upgrade</div>
+
+    <div class="panel" style="margin-top:18px;">
+      <h2>LEADERBOARD</h2>
+
+      <div class="row" style="align-items:flex-start;">
+        <div style="flex:1">
+          <div style="margin-bottom:6px;">Name</div>
+          <input id="lbName" maxlength="16" placeholder="Your name" style="width:100%;padding:8px;font-family:inherit;background:#000;color:var(--green);border:2px solid var(--green);" />
+          <div style="margin-top:8px;display:flex;gap:8px;">
+            <button id="lbSubmit">SUBMIT</button>
+            <button id="lbRefresh">REFRESH</button>
+          </div>
+          <div class="footer" id="lbStatus" style="margin-top:8px;">—</div>
+        </div>
+
+        <div style="flex:1">
+          <div style="margin-bottom:6px;">Top 10</div>
+          <ol id="lbList" style="margin:0;padding-left:18px;"></ol>
+        </div>
+      </div>
+    </div>
+
     </div>
   </div>
 
@@ -418,6 +440,135 @@
 
     // Init
     fullUpdate();
+  
+    // Expose score for leaderboard module
+    window.getScore10 = () => score10;
+    window.formatScore10 = (v10) => fmtScore10(v10);
+</script>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      serverTimestamp,
+      query,
+      orderBy,
+      limit,
+      getDocs
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAmdKfNp-9_I12DUxBP3ueFVWtk6cZIkio",
+      authDomain: "epsteinclicker.firebaseapp.com",
+      projectId: "epsteinclicker",
+      storageBucket: "epsteinclicker.firebasestorage.app",
+      messagingSenderId: "283677573494",
+      appId: "1:283677573494:web:4d890064f1dcbd2ec63a57",
+      measurementId: "G-MVXGJXLC3C"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const nameEl = document.getElementById("lbName");
+    const submitBtn = document.getElementById("lbSubmit");
+    const refreshBtn = document.getElementById("lbRefresh");
+    const listEl = document.getElementById("lbList");
+    const statusEl = document.getElementById("lbStatus");
+
+    function cleanName(raw) {
+      return (raw || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/[^\w\s\-]/g, "")
+        .slice(0, 16);
+    }
+
+    async function loadLeaderboard() {
+      statusEl.textContent = "Loading...";
+      listEl.innerHTML = "";
+
+      const q = query(
+        collection(db, "leaderboard"),
+        orderBy("digits", "desc"),
+        orderBy("scoreStr", "desc"),
+        limit(10)
+      );
+
+      const snap = await getDocs(q);
+
+      if (snap.empty) {
+        statusEl.textContent = "No scores yet.";
+        return;
+      }
+
+      snap.forEach(doc => {
+        const d = doc.data();
+        const li = document.createElement("li");
+
+        let display = d.scoreStr || "0";
+        try {
+          const v10 = BigInt(display);
+          if (window.formatScore10) display = window.formatScore10(v10);
+        } catch {}
+
+        li.textContent = `${d.name || "Anon"} — ${display}`;
+        listEl.appendChild(li);
+      });
+
+      statusEl.textContent = "Updated.";
+    }
+
+    const COOLDOWN_MS = 15000;
+    let lastSubmit = 0;
+
+    async function submitScore() {
+      const now = Date.now();
+      if (now - lastSubmit < COOLDOWN_MS) {
+        statusEl.textContent = `Wait ${Math.ceil((COOLDOWN_MS - (now - lastSubmit)) / 1000)}s.`;
+        return;
+      }
+
+      const name = cleanName(nameEl.value);
+      if (!name) {
+        statusEl.textContent = "Enter a name.";
+        return;
+      }
+
+      const score10 = window.getScore10?.();
+      if (typeof score10 !== "bigint") {
+        statusEl.textContent = "Score not found.";
+        return;
+      }
+      if (score10 < 0n) {
+        statusEl.textContent = "Invalid score.";
+        return;
+      }
+
+      const scoreStr = score10.toString();
+      const digits = scoreStr.length;
+
+      statusEl.textContent = "Submitting...";
+      lastSubmit = now;
+
+      await addDoc(collection(db, "leaderboard"), {
+        name,
+        scoreStr,
+        digits,
+        createdAt: serverTimestamp()
+      });
+
+      statusEl.textContent = "Submitted!";
+      await loadLeaderboard();
+    }
+
+    submitBtn.addEventListener("click", submitScore);
+    refreshBtn.addEventListener("click", loadLeaderboard);
+
+    loadLeaderboard();
   </script>
+
 </body>
 </html>
