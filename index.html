@@ -152,12 +152,71 @@
       20%{ opacity:1; }
       100%{ opacity:0; transform:translate(-50%,-70px) scale(1.05); }
     }
+  
+    /* Layout for main + leaderboard */
+    .layout{
+      display:flex;
+      gap:16px;
+      align-items:flex-start;
+      justify-content:center;
+      margin-top:8px;
+    }
+    .mainCol{
+      flex:1 1 640px;
+      max-width:680px;
+      min-width:320px;
+    }
+    .sideCol{
+      flex:0 0 320px;
+      width:320px;
+    }
+    .lbList{
+      text-align:left;
+      margin:0;
+      padding-left:22px;
+      line-height:1.8;
+      font-size:10px;
+    }
+    .lbRow{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      justify-content:center;
+      flex-wrap:wrap;
+      margin-top:10px;
+      margin-bottom:10px;
+    }
+    .lbInput{
+      width:100%;
+      padding:10px;
+      font-family:'Press Start 2P', monospace;
+      font-size:10px;
+      background:#000;
+      color:var(--green);
+      border:3px solid var(--green);
+      outline:none;
+      box-sizing:border-box;
+    }
+    .lbHint{
+      font-size:9px;
+      opacity:.85;
+      line-height:1.6;
+      margin-top:6px;
+    }
+    @media (max-width: 980px){
+      .layout{ flex-direction:column; align-items:center; }
+      .sideCol{ width:min(680px, 100%); }
+    }
+
   </style>
 </head>
 
 <body class="scanlines">
   <div class="wrap">
     <div class="title">EPSTEIN CLICKER</div>
+
+    <div class="layout">
+      <div class="mainCol">
 
     <div class="score">SCORE: <span id="score">0.0</span></div>
 
@@ -177,28 +236,24 @@
 
       <button class="danger" id="resetBtn">RESET SAVE</button>
       <div class="footer">Auto-saves | Scaling: Cursor x1.25, others x1.40 | Shows owned count per upgrade</div>
+    </div>
 
-    <div class="panel" style="margin-top:18px;">
-      <h2>LEADERBOARD</h2>
+      </div>
+      <div class="sideCol">
+        <div class="panel">
+          <h2>WORLD TOP 10</h2>
 
-      <div class="row" style="align-items:flex-start;">
-        <div style="flex:1">
-          <div style="margin-bottom:6px;">Name</div>
-          <input id="lbName" maxlength="16" placeholder="Your name" style="width:100%;padding:8px;font-family:inherit;background:#000;color:var(--green);border:2px solid var(--green);" />
-          <div style="margin-top:8px;display:flex;gap:8px;">
+          <div class="lbRow">
+            <input id="lbName" class="lbInput" maxlength="16" placeholder="NAME (8+ CHARS)" />
             <button id="lbSubmit">SUBMIT</button>
             <button id="lbRefresh">REFRESH</button>
           </div>
-          <div class="footer" id="lbStatus" style="margin-top:8px;">—</div>
-        </div>
 
-        <div style="flex:1">
-          <div style="margin-bottom:6px;">Top 10</div>
-          <ol id="lbList" style="margin:0;padding-left:18px;"></ol>
+          <ol id="lbList" class="lbList"></ol>
+          <div class="lbHint" id="lbStatus">—</div>
+          <div class="footer lbHint" id="lbYou">YOUR BEST: —</div>
         </div>
       </div>
-    </div>
-
     </div>
   </div>
 
@@ -438,13 +493,14 @@
       location.reload();
     });
 
-    // Init
-    fullUpdate();
-  
-    // Expose score for leaderboard module
+
+    // Expose score helpers for leaderboard module
     window.getScore10 = () => score10;
     window.formatScore10 = (v10) => fmtScore10(v10);
-</script>
+
+    // Init
+    fullUpdate();
+  </script>
 
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
@@ -477,8 +533,13 @@
     const refreshBtn = document.getElementById("lbRefresh");
     const listEl = document.getElementById("lbList");
     const statusEl = document.getElementById("lbStatus");
+    const youEl = document.getElementById("lbYou");
 
-    function cleanName(raw) {
+    const NAME_MIN = 8;
+    const COOLDOWN_MS = 15000;
+    let lastSubmit = 0;
+
+    function cleanName(raw){
       return (raw || "")
         .trim()
         .replace(/\s+/g, " ")
@@ -486,8 +547,10 @@
         .slice(0, 16);
     }
 
-    async function loadLeaderboard() {
-      statusEl.textContent = "Loading...";
+    function setStatus(msg){ statusEl.textContent = msg; }
+
+    async function loadTop10(){
+      setStatus("Loading...");
       listEl.innerHTML = "";
 
       const q = query(
@@ -499,58 +562,90 @@
 
       const snap = await getDocs(q);
 
-      if (snap.empty) {
-        statusEl.textContent = "No scores yet.";
+      if (snap.empty){
+        setStatus("No scores yet.");
         return;
       }
 
       snap.forEach(doc => {
         const d = doc.data();
-        const li = document.createElement("li");
-
         let display = d.scoreStr || "0";
-        try {
+        try{
           const v10 = BigInt(display);
-          if (window.formatScore10) display = window.formatScore10(v10);
-        } catch {}
-
+          display = window.formatScore10(v10);
+        }catch{}
+        const li = document.createElement("li");
         li.textContent = `${d.name || "Anon"} — ${display}`;
         listEl.appendChild(li);
       });
 
-      statusEl.textContent = "Updated.";
+      setStatus("Updated.");
     }
 
-    const COOLDOWN_MS = 15000;
-    let lastSubmit = 0;
+    async function updateYourRank(){
+      const saved = localStorage.getItem("lb_best_v10");
+      const savedName = localStorage.getItem("lb_name") || "";
+      if (!saved || !savedName){
+        youEl.textContent = "YOUR BEST: —";
+        return;
+      }
+      let bestV10 = 0n;
+      try{ bestV10 = BigInt(saved); }catch{ bestV10 = 0n; }
+      youEl.textContent = `YOUR BEST: ${savedName} — ${window.formatScore10(bestV10)}`;
 
-    async function submitScore() {
+      // optional: rank within top 100
+      try{
+        const q100 = query(
+          collection(db, "leaderboard"),
+          orderBy("digits", "desc"),
+          orderBy("scoreStr", "desc"),
+          limit(100)
+        );
+        const snap = await getDocs(q100);
+        let rank = 1;
+        let found = false;
+        snap.forEach(doc => {
+          const d = doc.data();
+          if (!found && d.name === savedName && d.scoreStr === bestV10.toString()) {
+            found = true;
+          } else if (!found) {
+            rank++;
+          }
+        });
+        if (found) youEl.textContent += `  |  RANK (TOP 100): #${rank}`;
+        else youEl.textContent += "  |  RANK: 100+";
+      }catch{
+        // ignore
+      }
+    }
+
+    async function submitScore(){
       const now = Date.now();
-      if (now - lastSubmit < COOLDOWN_MS) {
-        statusEl.textContent = `Wait ${Math.ceil((COOLDOWN_MS - (now - lastSubmit)) / 1000)}s.`;
+      if (now - lastSubmit < COOLDOWN_MS){
+        setStatus(`Wait ${Math.ceil((COOLDOWN_MS - (now - lastSubmit))/1000)}s.`);
         return;
       }
 
       const name = cleanName(nameEl.value);
-      if (!name) {
-        statusEl.textContent = "Enter a name.";
+      if (name.length < NAME_MIN){
+        setStatus(`Name must be ${NAME_MIN}+ characters.`);
         return;
       }
 
       const score10 = window.getScore10?.();
-      if (typeof score10 !== "bigint") {
-        statusEl.textContent = "Score not found.";
+      if (typeof score10 !== "bigint"){
+        setStatus("Score not found.");
         return;
       }
-      if (score10 < 0n) {
-        statusEl.textContent = "Invalid score.";
+      if (score10 < 0n){
+        setStatus("Invalid score.");
         return;
       }
 
       const scoreStr = score10.toString();
       const digits = scoreStr.length;
 
-      statusEl.textContent = "Submitting...";
+      setStatus("Submitting...");
       lastSubmit = now;
 
       await addDoc(collection(db, "leaderboard"), {
@@ -560,14 +655,35 @@
         createdAt: serverTimestamp()
       });
 
-      statusEl.textContent = "Submitted!";
-      await loadLeaderboard();
+      // store local best
+      const prev = localStorage.getItem("lb_best_v10");
+      let prevV = -1n;
+      try{ if (prev) prevV = BigInt(prev); }catch{ prevV = -1n; }
+      if (score10 > prevV){
+        localStorage.setItem("lb_best_v10", scoreStr);
+        localStorage.setItem("lb_name", name);
+      }
+
+      setStatus("Submitted!");
+      await loadTop10();
+      await updateYourRank();
     }
 
-    submitBtn.addEventListener("click", submitScore);
-    refreshBtn.addEventListener("click", loadLeaderboard);
+    submitBtn.addEventListener("click", () => submitScore().catch(err => {
+      console.error(err);
+      setStatus("Error. Check console (F12).");
+    }));
 
-    loadLeaderboard();
+    refreshBtn.addEventListener("click", () => {
+      loadTop10().catch(console.error);
+      updateYourRank().catch(console.error);
+    });
+
+    // initial
+    loadTop10().then(updateYourRank).catch(err => {
+      console.error(err);
+      setStatus("Error. Check console (F12).");
+    });
   </script>
 
 </body>
